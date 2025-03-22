@@ -134,4 +134,278 @@ npm run build
 - [Wujie 官方文档](https://wujie-micro.github.io/doc/)
 - [Vue 3 文档](https://cn.vuejs.org/)
 - [React 文档](https://react.dev/)
+
+
+## 依赖共享配置
+
+### 1. 主应用配置
+
+在主应用中加载公共依赖：
+
+```js
+import { createApp } from 'vue'
+import App from './App.vue'
+import router from './router'
+import WujieVue from "wujie-vue3"
+import React from 'react'
+import ReactDOM from 'react-dom'
+
+// 将公共依赖挂载到全局
+window.React = React
+window.ReactDOM = ReactDOM
+window.Vue = createApp
+
+const app = createApp(App)
+app.use(router)
+app.use(WujieVue)
+app.mount('#app')
 ```
+
+### 2. Vue3 子应用配置
+
+修改 Vue3 子应用的 vite.config.js：
+
+```js
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    port: 5173,
+    cors: true,
+    headers: {
+      'Access-Control-Allow-Origin': '*'
+    }
+  },
+  build: {
+    rollupOptions: {
+      external: ['vue'],
+      output: {
+        globals: {
+          vue: 'Vue'
+        }
+      }
+    }
+  }
+})
+```
+
+### 3. React 子应用配置
+
+修改 React 子应用的 vite.config.js：
+
+```js
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5174,
+    cors: true,
+    headers: {
+      'Access-Control-Allow-Origin': '*'
+    }
+  },
+  build: {
+    rollupOptions: {
+      external: ['react', 'react-dom'],
+      output: {
+        globals: {
+          react: 'React',
+          'react-dom': 'ReactDOM'
+        }
+      }
+    }
+  }
+})
+```
+
+### 4. 注意事项
+
+1. 确保主应用中加载的依赖版本与子应用开发时使用的版本兼容
+2. 在子应用的 package.json 中将共享依赖标记为 peerDependencies：
+
+```json
+{
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  }
+}
+```
+
+```json
+{
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  }
+}
+```
+
+### 5. 优势
+
+1. 减小子应用打包体积
+2. 避免重复加载相同依赖
+3. 提高应用加载性能
+4. 确保依赖版本一致性
+
+
+这样配置后，主应用会加载并共享通用依赖，子应用则通过 externals 配置排除这些依赖，从而避免重复加载。这种方式可以有效减小子应用的打包体积，提高加载性能。
+
+
+## 性能优化配置
+
+### 1. 子应用懒加载
+
+修改主应用的路由配置：
+
+```js
+import { createRouter, createWebHistory } from 'vue-router'
+import { defineAsyncComponent } from 'vue'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/vue3',
+      name: 'vue3',
+      component: () => defineAsyncComponent(() => import('../views/vue3.vue')),
+      meta: { preload: false }  // 控制是否预加载
+    },
+    {
+      path: '/react',
+      name: 'react',
+      component: () => defineAsyncComponent(() => import('../views/react.vue')),
+      meta: { preload: false }
+    }
+  ]
+})
+```
+
+### 2. 代码分割配置
+
+Vue3 子应用的 vite.config.js 配置：
+
+```js
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor': ['vue'],
+          'utils': ['./src/utils/**/*.js'],
+          'components': ['./src/components/**/*.vue']
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000
+  }
+})
+```
+
+React 子应用的 vite.config.js 配置：
+
+```js
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor': ['react', 'react-dom'],
+          'utils': ['./src/utils/**/*.js'],
+          'components': ['./src/components/**/*.jsx']
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000
+  }
+})
+```
+
+### 3. 缓存策略配置
+
+Nginx 配置示例：
+
+```nginx
+# 静态资源缓存配置
+location /static/ {
+    expires 1y;
+    add_header Cache-Control "public, no-transform";
+}
+
+# JS/CSS 文件缓存配置
+location ~* \.(js|css)$ {
+    expires 1d;
+    add_header Cache-Control "public, no-transform";
+}
+
+# HTML 文件不缓存
+location ~* \.html$ {
+    expires -1;
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
+}
+```
+
+### 4. 预加载配置
+
+主应用中配置预加载策略：
+
+```js
+import WujieVue from "wujie-vue3"
+
+app.use(WujieVue, {
+  preload: true,  // 是否开启预加载
+  props: {
+    jump: (name) => router.push({ name })
+  }
+})
+
+// 配置预加载应用
+const preloadApps = [
+  {
+    name: "vue3",
+    url: "http://localhost:5173",
+    exec: true
+  }
+]
+
+// 执行预加载
+window.addEventListener("load", () => {
+  preloadApps.forEach(app => {
+    window.$wujie?.preloadApp(app)
+  })
+})
+```
+
+### 5. 优化建议
+
+1. **子应用按需加载**
+   - 路由懒加载
+   - 组件异步加载
+   - 使用 `Suspense` 和 `defineAsyncComponent`
+
+2. **资源优化**
+   - 使用 HTTP/2
+   - 开启 gzip 压缩
+   - 使用 CDN 加速
+   - 图片懒加载和压缩
+
+3. **缓存优化**
+   - 合理设置缓存策略
+   - 使用 Service Worker
+   - 利用浏览器缓存
+   - 实现资源预加载
+
+4. **构建优化**
+   - Tree Shaking
+   - 代码分割
+   - 压缩混淆
+   - 移除未使用代码
+
+5. **监控与分析**
+   - 性能监控
+   - 错误监控
+   - 加载时间分析
+   - 资源大小分析
